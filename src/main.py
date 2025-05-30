@@ -140,7 +140,8 @@ def load_language_config():
             return [
                 {"code": "rus", "name": "Русский"},
                 {"code": "eng", "name": "English"},
-                {"code": "rus+eng", "name": "Русский + English"}
+                {"code": "rus+eng", "name": "Русский + English"},
+                {"code": "latex", "name": "LaTeX"}
             ], "rus+eng"
 
         with open(config_path, "r", encoding="utf-8") as f:
@@ -151,7 +152,8 @@ def load_language_config():
         return [
             {"code": "rus", "name": "Русский"},
             {"code": "eng", "name": "English"},
-            {"code": "rus+eng", "name": "Русский + English"}
+            {"code": "rus+eng", "name": "Русский + English"},
+            {"code": "latex", "name": "LaTeX"}
         ], "rus+eng"
 
 
