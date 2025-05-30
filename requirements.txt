@@ -1,0 +1,4 @@
+flet
+pytesseract
+pillow
+pyperclip
