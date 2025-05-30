@@ -7,6 +7,7 @@ import re
 import os
 import json
 from pathlib import Path
+from pix2tex.cli import LatexOCR
 
 # pytesseract.pytesseract.tesseract_cmd = "tesseract.exe"  # Укажите путь к tesseract.exe, если он не в PATH
 
@@ -18,7 +19,12 @@ def remove_hyphen_linebreaks(text: str) -> str:
     return re.sub(r'-\s*\n\s*', '', text)
 
 
-def format_text(text: str) -> str:
+def format_text(text: str, mode: str) -> str:
+    # Don't format LaTeX formulas
+    if mode == "latex":
+        return text.strip()
+
+    # Regular text formatting
     # Убираем лишние переносы строк
     text = remove_hyphen_linebreaks(text)
     text = text.replace('\n', ' ').strip()
@@ -33,9 +39,26 @@ def format_text(text: str) -> str:
     return ' '.join(sentences)
 
 
+def extract_latex_from_image(img) -> str:
+    """
+    Извлекает LaTeX из изображения с помощью pix2tex.
+    """
+    try:
+        model = LatexOCR()
+        result = model(img)
+        if result:
+            return result
+        else:
+            return "Не удалось распознать LaTeX."
+    except Exception as e:
+        return f"Ошибка при распознавании LaTeX: {str(e)}"
+
+
 def extract_text_from_image(img, lang) -> str:
-    extracted_text = pytesseract.image_to_string(img, lang=lang)
-    return extracted_text
+    if lang == "latex":
+        return extract_latex_from_image(img)
+    else:
+        return pytesseract.image_to_string(img, lang=lang)
 
 
 def convert_to_rgb(image: Image.Image) -> Image.Image:
@@ -142,7 +165,23 @@ def main(page: ft.Page):
     current_image = {"image": None}
 
     text_output = ft.TextField(
-        label="Распознанный текст", multiline=True, min_lines=5, max_lines=20)
+        label="Распознанный текст",
+        multiline=True,
+        min_lines=5,
+        max_lines=20,
+        text_size=16,  # Larger text size for better formula visibility
+    )
+
+    def update_ui_for_mode(mode: str):
+        # Update UI elements based on selected mode
+        format_text_button.visible = mode != "latex"
+        text_output.label = "Распознанная формула LaTeX" if mode == "latex" else "Распознанный текст"
+        page.update()
+
+    def on_lang_change(e):
+        update_ui_for_mode(lang_dropdown.value)
+        if current_image["image"] is not None:
+            retry_recognition(None)
 
     def retry_recognition(e):
         if current_image["image"] is None:
@@ -271,10 +310,16 @@ def main(page: ft.Page):
 
     def format_text_click(e):
         if text_output.value.strip():
-            text_output.value = format_text(text_output.value)
+            text_output.value = format_text(
+                text_output.value, lang_dropdown.value)
         else:
             text_output.value = "Сначала распознайте текст."
         page.update()
+
+    format_text_button = ft.ElevatedButton(
+        "Форматировать текст",
+        on_click=format_text_click
+    )
 
     def copy_to_clipboard(e):
         pyperclip.copy(text_output.value)
@@ -300,6 +345,8 @@ def main(page: ft.Page):
         width=200
     )
 
+    lang_dropdown.on_change = on_lang_change
+
     page.add(
         ft.Column([
             ft.Row(
@@ -321,10 +368,7 @@ def main(page: ft.Page):
             text_output,
             ft.Row(
                 [
-                    ft.ElevatedButton(
-                        "Форматировать текст",
-                        on_click=format_text_click
-                    ),
+                    format_text_button,
                     ft.ElevatedButton(
                         "Скопировать текст",
                         on_click=copy_to_clipboard

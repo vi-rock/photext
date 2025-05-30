@@ -11,6 +11,10 @@
         {
             "code": "rus+eng",
             "name": "Русский + English"
+        },
+        {
+            "code": "latex",
+            "name": "LaTeX"
         }
     ],
     "default": "rus+eng"

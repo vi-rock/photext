@@ -2,3 +2,4 @@ flet
 pytesseract
 pillow
 pyperclip
+pix2tex
