@@ -1,21 +1,21 @@
 {
     "languages": [
         {
-            "code": "rus",
+            "code": ["ru"],
             "name": "Русский"
         },
         {
-            "code": "eng",
+            "code": ["en"],
             "name": "English"
         },
         {
-            "code": "rus+eng",
+            "code": ["ru", "en"],
             "name": "Русский + English"
         },
         {
-            "code": "latex",
+            "code": ["latex"],
             "name": "LaTeX"
         }
     ],
-    "default": "rus+eng"
+    "default_index": 2
 }

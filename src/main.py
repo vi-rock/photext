@@ -1,6 +1,6 @@
 import flet as ft
 from PIL import Image
-import pytesseract
+import easyocr
 import pyperclip
 from PIL import ImageGrab
 import re
@@ -8,6 +8,30 @@ import os
 import json
 from pathlib import Path
 from pix2tex.cli import LatexOCR
+
+# Initialize EasyOCR readers for different languages
+# We'll initialize them lazily to avoid loading all models at startup
+_easyocr_readers = {}
+
+
+def get_easyocr_reader(lang_codes):
+    """Get or create EasyOCR reader for specified language codes"""
+    # Convert list to tuple for use as dictionary key
+    if isinstance(lang_codes, list):
+        key = tuple(lang_codes)
+    else:
+        key = (lang_codes,)
+
+    if key not in _easyocr_readers:
+        # Skip LaTeX as it's handled separately
+        if 'latex' in lang_codes:
+            return None
+
+        print(f"Инициализация модели распознавания для языков: {lang_codes}")
+        _easyocr_readers[key] = easyocr.Reader(lang_codes, gpu=False)
+        print("Модель загружена успешно!")
+
+    return _easyocr_readers[key]
 
 # pytesseract.pytesseract.tesseract_cmd = "tesseract.exe"  # Укажите путь к tesseract.exe, если он не в PATH
 
@@ -19,9 +43,9 @@ def remove_hyphen_linebreaks(text: str) -> str:
     return re.sub(r'-\s*\n\s*', '', text)
 
 
-def format_text(text: str, mode: str) -> str:
+def format_text(text: str, lang_codes) -> str:
     # Don't format LaTeX formulas
-    if mode == "latex":
+    if isinstance(lang_codes, list) and "latex" in lang_codes:
         return text.strip()
 
     # Regular text formatting
@@ -54,16 +78,40 @@ def extract_latex_from_image(img) -> str:
         return f"Ошибка при распознавании LaTeX: {str(e)}"
 
 
-def extract_text_from_image(img, lang) -> str:
-    if lang == "latex":
+def extract_text_from_image(img, lang_codes) -> str:
+    if isinstance(lang_codes, list) and "latex" in lang_codes:
         return extract_latex_from_image(img)
     else:
-        return pytesseract.image_to_string(img, lang=lang)
+        try:
+            reader = get_easyocr_reader(lang_codes)
+            if reader is None:  # LaTeX case
+                return extract_latex_from_image(img)
+
+            # Convert PIL Image to numpy array if needed
+            import numpy as np
+            if hasattr(img, 'mode'):  # PIL Image
+                img_array = np.array(img)
+            else:
+                img_array = img
+
+            # Extract text using EasyOCR
+            results = reader.readtext(img_array)
+
+            # Combine all detected text
+            extracted_text = ""
+            for (bbox, text, confidence) in results:
+                if confidence > 0.3:  # Filter out low-confidence detections
+                    extracted_text += text + " "
+
+            return extracted_text.strip() if extracted_text else "Текст не обнаружен"
+
+        except Exception as e:
+            return f"Ошибка при распознавании текста: {str(e)}"
 
 
 def convert_to_rgb(image: Image.Image) -> Image.Image:
     """
-    Приводит изображение к пригодному формату для Tesseract OCR.
+    Приводит изображение к пригодному формату для OCR.
     Убирает альфа-канал, приводит к RGB и применяет предобработку для улучшения распознавания.
     """
     try:
@@ -131,30 +179,44 @@ def get_image_from_clipboard_common():
 def load_language_config():
     """
     Загружает конфигурацию языков из файла config/languages.json
-    Возвращает список языков и язык по умолчанию
+    Возвращает список языков и индекс языка по умолчанию
     """
     try:
         config_path = Path(__file__).parent.parent / \
             "config" / "languages.json"
         if not config_path.exists():
             return [
-                {"code": "rus", "name": "Русский"},
-                {"code": "eng", "name": "English"},
-                {"code": "rus+eng", "name": "Русский + English"},
-                {"code": "latex", "name": "LaTeX"}
-            ], "rus+eng"
+                {"code": ["ru"], "name": "Русский"},
+                {"code": ["en"], "name": "English"},
+                {"code": ["ru", "en"], "name": "Русский + English"},
+                {"code": ["latex"], "name": "LaTeX"}
+            ], 2  # Default to "Русский + English"
 
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-            return config["languages"], config["default"]
+            languages = config["languages"]
+            default_index = config["default_index"]
+
+            return languages, default_index
     except Exception as e:
         print(f"Ошибка загрузки конфигурации языков: {e}")
         return [
-            {"code": "rus", "name": "Русский"},
-            {"code": "eng", "name": "English"},
-            {"code": "rus+eng", "name": "Русский + English"},
-            {"code": "latex", "name": "LaTeX"}
-        ], "rus+eng"
+            {"code": ["ru"], "name": "Русский"},
+            {"code": ["en"], "name": "English"},
+            {"code": ["ru", "en"], "name": "Русский + English"},
+            {"code": ["latex"], "name": "LaTeX"}
+        ], 2
+
+
+def get_selected_language_codes(languages, dropdown_value):
+    """Get language codes for selected dropdown index"""
+    try:
+        index = int(dropdown_value)
+        if 0 <= index < len(languages):
+            return languages[index]["code"]
+        return ["en"]  # fallback
+    except (ValueError, IndexError):
+        return ["en"]  # fallback
 
 
 def main(page: ft.Page):
@@ -174,10 +236,11 @@ def main(page: ft.Page):
         text_size=16,  # Larger text size for better formula visibility
     )
 
-    def update_ui_for_mode(mode: str):
-        # Update UI elements based on selected mode
-        format_text_button.visible = mode != "latex"
-        text_output.label = "Распознанная формула LaTeX" if mode == "latex" else "Распознанный текст"
+    def update_ui_for_mode(selected_index: str):
+        lang_codes = get_selected_language_codes(languages, selected_index)
+        is_latex = "latex" in lang_codes
+        format_text_button.visible = not is_latex
+        text_output.label = "Распознанная формула LaTeX" if is_latex else "Распознанный текст"
         page.update()
 
     def on_lang_change(e):
@@ -191,11 +254,12 @@ def main(page: ft.Page):
             page.update()
             return
 
+        lang_codes = get_selected_language_codes(
+            languages, lang_dropdown.value)
         text_output.value = extract_text_from_image(
-            current_image["image"], lang=lang_dropdown.value)
+            current_image["image"], lang_codes)
         page.update()
 
-    # Preview image and thumbnail components
     preview_image = ft.Image(
         width=600,
         height=400,
@@ -294,8 +358,9 @@ def main(page: ft.Page):
             page.update()
             return
 
-        extracted_text = extract_text_from_image(
-            img, lang=lang_dropdown.value)
+        lang_codes = get_selected_language_codes(
+            languages, lang_dropdown.value)
+        extracted_text = extract_text_from_image(img, lang_codes)
         text_output.value = extracted_text
         page.update()
 
@@ -305,15 +370,17 @@ def main(page: ft.Page):
             img = Image.open(image_path)
             update_preview_images(img)
             current_image["image"] = img
-            extracted_text = extract_text_from_image(
-                img, lang=lang_dropdown.value)
+            lang_codes = get_selected_language_codes(
+                languages, lang_dropdown.value)
+            extracted_text = extract_text_from_image(img, lang_codes)
             text_output.value = extracted_text
             page.update()
 
     def format_text_click(e):
         if text_output.value.strip():
-            text_output.value = format_text(
-                text_output.value, lang_dropdown.value)
+            lang_codes = get_selected_language_codes(
+                languages, lang_dropdown.value)
+            text_output.value = format_text(text_output.value, lang_codes)
         else:
             text_output.value = "Сначала распознайте текст."
         page.update()
@@ -332,7 +399,6 @@ def main(page: ft.Page):
 
     clear_btn = ft.ElevatedButton(
         "Очистить", on_click=lambda e: clear_text(e))
-
     file_picker = ft.FilePicker(on_result=pick_file_result)
     page.overlay.append(file_picker)
     page.overlay.append(preview_dialog)
@@ -341,9 +407,9 @@ def main(page: ft.Page):
 
     lang_dropdown = ft.Dropdown(
         label="Язык распознавания",
-        options=[ft.dropdown.Option(lang["code"], text=lang["name"])
-                 for lang in languages],
-        value=default_lang,
+        options=[ft.dropdown.Option(str(i), text=lang["name"])
+                 for i, lang in enumerate(languages)],
+        value=str(default_lang),
         width=200
     )
 
